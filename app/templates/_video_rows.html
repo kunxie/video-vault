@@ -1,0 +1,34 @@
+{% if videos %}
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Size</th>
+      <th>Uploaded</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for video in videos %}
+    <tr>
+      <td>{{ video.filename }}</td>
+      <td>{{ video.size_bytes | human_size }}</td>
+      <td>{{ video.created_at.strftime("%Y-%m-%d") }}</td>
+      <td class="actions">
+        <a href="/videos/{{ video.id }}/watch">Watch</a>
+        <a href="/api/videos/{{ video.id }}/download">Download</a>
+        <button
+          hx-delete="/api/videos/{{ video.id }}"
+          hx-confirm="Delete this video?"
+          hx-swap="none"
+        >
+          Delete
+        </button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No videos yet. Upload one above.</p>
+{% endif %}

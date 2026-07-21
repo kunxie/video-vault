@@ -1,0 +1,55 @@
+[project]
+name = "video-vault"
+version = "0.1.0"
+description = "Personal service for uploading, downloading, deleting, and watching MP4 videos."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic-settings>=2.7",
+    "sqlalchemy>=2.0.36",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.14",
+    "boto3>=1.35",
+    "jinja2>=3.1",
+    "streaming-form-data>=1.19",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "moto[s3]>=5.0",
+    "httpx>=0.28",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "boto3-stubs[s3]>=1.35",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+
+[tool.ruff.lint.per-file-ignores]
+# conftest sets AWS env vars before importing boto3/moto, so imports follow.
+"tests/conftest.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = []
+
+[[tool.mypy.overrides]]
+# streaming-form-data ships no type stubs / py.typed marker.
+module = "streaming_form_data.*"
+ignore_missing_imports = true

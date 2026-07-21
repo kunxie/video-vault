@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}{{ video.filename }} — Video Vault{% endblock %}
+
+{% block content %}
+<a class="back" href="/">&larr; Back</a>
+<h1>{{ video.filename }}</h1>
+<video controls style="width: 100%; max-height: 70vh; background: #000">
+  <source src="/api/videos/{{ video.id }}/stream" type="{{ video.content_type }}" />
+  Your browser does not support the video tag.
+</video>
+{% endblock %}
