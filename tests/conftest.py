@@ -5,9 +5,9 @@ from collections.abc import Iterator
 
 # moto intercepts calls to the real AWS S3 endpoint, not an arbitrary MinIO host,
 # so tests point the storage client there. Provide the region/creds boto3 needs.
-os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
+_AWS_REGION = os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+_AWS_ACCESS_KEY_ID = os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
+_AWS_SECRET_ACCESS_KEY = os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
 
 _S3_ENDPOINT = "https://s3.amazonaws.com"
 
@@ -65,9 +65,9 @@ def build_client() -> Iterator:
         s3 = boto3.client(
             "s3",
             endpoint_url=_S3_ENDPOINT,
-            region_name="us-east-1",
-            aws_access_key_id="testing",
-            aws_secret_access_key="testing",
+            region_name=_AWS_REGION,
+            aws_access_key_id=_AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=_AWS_SECRET_ACCESS_KEY,
             config=BotoConfig(signature_version="s3v4"),
         )
         s3.create_bucket(Bucket=TEST_BUCKET)
@@ -76,8 +76,8 @@ def build_client() -> Iterator:
             settings = _make_settings(max_upload_size_bytes)
             storage = VideoStorage(
                 endpoint=_S3_ENDPOINT,
-                access_key="testing",
-                secret_key="testing",
+                access_key=_AWS_ACCESS_KEY_ID,
+                secret_key=_AWS_SECRET_ACCESS_KEY,
                 bucket=TEST_BUCKET,
             )
             app.dependency_overrides[get_db] = _db_override

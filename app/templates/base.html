@@ -4,7 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}Video Vault{% endblock %}</title>
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script
+      src="https://unpkg.com/htmx.org@2.0.4"
+      integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+      crossorigin="anonymous"
+    ></script>
     <style>
       :root { color-scheme: light dark; }
       body {
@@ -33,6 +37,17 @@
       .htmx-request .htmx-indicator { opacity: 1; }
       .empty { color: #8888; font-style: italic; }
       a.back { display: inline-block; margin-bottom: 1rem; }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
     </style>
   </head>
   <body>

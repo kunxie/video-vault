@@ -29,6 +29,7 @@ Storage = Annotated[VideoStorage, Depends(get_storage)]
 Config = Annotated[Settings, Depends(get_settings)]
 
 _HX_TRIGGER = "videoChanged"
+_VIDEO_NOT_FOUND = "Video not found"
 
 
 def _notify_htmx(request: Request, response: Response) -> None:
@@ -40,7 +41,7 @@ def _notify_htmx(request: Request, response: Response) -> None:
 def _get_video_or_404(db: Session, video_id: uuid.UUID) -> Video:
     video = db.get(Video, video_id)
     if video is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Video not found")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, _VIDEO_NOT_FOUND)
     return video
 
 
@@ -143,7 +144,7 @@ async def download_video(video_id: uuid.UUID, db: DbSession, storage: Storage) -
     try:
         stream = storage.get_object(video.storage_key)
     except ObjectNotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Video not found") from None
+        raise HTTPException(status.HTTP_404_NOT_FOUND, _VIDEO_NOT_FOUND) from None
     # Quote-strip the filename so it can't break out of the header value.
     safe_name = video.filename.replace('"', "")
     return _stream_response(
@@ -162,7 +163,7 @@ async def stream_video(
     try:
         stream = storage.get_object(video.storage_key, range_header=range_header)
     except ObjectNotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Video not found") from None
+        raise HTTPException(status.HTTP_404_NOT_FOUND, _VIDEO_NOT_FOUND) from None
     except InvalidRangeError:
         raise HTTPException(
             status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE, "Requested range not satisfiable"

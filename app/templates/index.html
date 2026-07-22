@@ -10,7 +10,8 @@
   hx-swap="none"
   hx-on::after-request="if (event.detail.successful) this.reset()"
 >
-  <input type="file" name="file" accept="video/mp4,.mp4" required />
+  <label class="visually-hidden" for="video-file">Video file</label>
+  <input id="video-file" type="file" name="file" accept="video/mp4,.mp4" required />
   <button type="submit">Upload</button>
   <span class="htmx-indicator">Uploading&hellip;</span>
 </form>
