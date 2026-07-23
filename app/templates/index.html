@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Video Vault</h1>
+
+<form
+  class="upload-form"
+  hx-post="/api/videos"
+  hx-encoding="multipart/form-data"
+  hx-swap="none"
+  hx-on::after-request="if (event.detail.successful) this.reset()"
+>
+  <label class="visually-hidden" for="video-file">Video file</label>
+  <input id="video-file" type="file" name="file" accept="video/mp4,.mp4" required />
+  <button type="submit">Upload</button>
+  <span class="htmx-indicator">Uploading&hellip;</span>
+</form>
+
+<div
+  id="video-list"
+  hx-get="/fragments/videos"
+  hx-trigger="load, videoChanged from:body"
+  hx-swap="innerHTML"
+>
+  {% include "_video_rows.html" %}
+</div>
+{% endblock %}
