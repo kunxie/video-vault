@@ -82,7 +82,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: release-verification
-          image: platform-runtime-image
+          # The platform replaces this symbolic slot with an immutable digest.
+          image: platform-runtime-image # NOSONAR
           imagePullPolicy: Always
           args:
             - verify-services

@@ -77,7 +77,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: database-migration
-          image: platform-migration-image
+          # The platform replaces this symbolic slot with an immutable digest.
+          image: platform-migration-image # NOSONAR
           imagePullPolicy: Always
           args:
             - migrate

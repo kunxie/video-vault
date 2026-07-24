@@ -38,5 +38,7 @@ def test_discrete_database_settings_create_escaped_url() -> None:
 
 
 def test_database_configuration_is_required() -> None:
+    storage_settings = _storage_settings()
+
     with pytest.raises(ValidationError, match="database_url or all discrete"):
-        Settings(**_storage_settings())
+        Settings(**storage_settings)

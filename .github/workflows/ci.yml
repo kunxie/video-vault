@@ -118,14 +118,16 @@ jobs:
       - name: Install the pinned Kubernetes client
         run: |
           mkdir -p "${RUNNER_TEMP}/bin"
-          curl --fail --location --silent --show-error \
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --silent --show-error \
             --output "${RUNNER_TEMP}/kubectl" \
             "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           echo "${KUBECTL_SHA256}  ${RUNNER_TEMP}/kubectl" | sha256sum --check
           install -m 0755 "${RUNNER_TEMP}/kubectl" "${RUNNER_TEMP}/bin/kubectl"
       - name: Install the pinned Kubernetes schema validator
         run: |
-          curl --fail --location --silent --show-error \
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --silent --show-error \
             --output "${RUNNER_TEMP}/kubeconform.tar.gz" \
             "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
           echo "${KUBECONFORM_SHA256}  ${RUNNER_TEMP}/kubeconform.tar.gz" | sha256sum --check

@@ -35,7 +35,8 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: web
-          image: platform-runtime-image
+          # The platform replaces this symbolic slot with an immutable digest.
+          image: platform-runtime-image # NOSONAR
           imagePullPolicy: Always
           args:
             - serve
