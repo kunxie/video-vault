@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: video-vault
+  labels:
+    app.kubernetes.io/component: web
+    app.kubernetes.io/name: video-vault
+    app.kubernetes.io/part-of: video-vault
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: video-vault
+      port:
+        number: 80
+  tls:
+    - hosts:
+        - video-vault

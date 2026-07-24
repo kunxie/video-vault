@@ -7,6 +7,14 @@ download, delete, and watch online. Runs on the `macmini-lab` platform
 
 Current scope: [`docs/v1/requirements.md`](docs/v1/requirements.md).
 
+## Macmini-lab deployment
+
+The production package lives under [`deploy/`](deploy/README.md). It publishes
+an immutable ARM64 image to GHCR and is registered separately in
+`macmini-lab`, following the same reviewed GitOps boundary as
+`job-info-collector`. The web UI is exposed only to the private tailnet at the
+`video-vault` Tailscale hostname.
+
 ## Future Ideas
 
 Not committed to any version — a backlog of directions to grow into, kept
@@ -68,8 +76,6 @@ how likely each is to come next.
 
 ### Platform & Ops
 
-- CI/CD: GitHub Actions building/testing/publishing the image to GHCR,
-  registered with `macmini-lab`'s Argo CD application registry.
 - Structured logging and metrics wired into the platform's shared
   Grafana/Loki/Prometheus stack.
 - Integration tests against real Postgres/MinIO via Testcontainers.

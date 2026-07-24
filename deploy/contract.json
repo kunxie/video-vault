@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "application": "video-vault",
+  "overlay": "deploy/overlays/macmini-lab",
+  "namespace": "video-vault",
+  "platform": "linux/arm64",
+  "imageSlots": {
+    "runtime": "platform-runtime-image",
+    "migration": "platform-migration-image"
+  },
+  "migration": {
+    "kind": "alembic",
+    "headCommand": ["schema-head"],
+    "ancestryCommand": ["schema-descends-from"]
+  },
+  "requiredSecrets": {
+    "video-vault-db-credentials": [
+      "username",
+      "password",
+      "host",
+      "port",
+      "dbname"
+    ],
+    "video-vault-minio-credentials": [
+      "endpoint",
+      "bucket",
+      "access-key",
+      "secret-key"
+    ]
+  }
+}

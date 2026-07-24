@@ -58,6 +58,10 @@ class VideoStorage:
         except ClientError:
             self._client.create_bucket(Bucket=self._bucket)
 
+    def check_bucket(self) -> None:
+        """Verify that the configured bucket is reachable without writing to it."""
+        self._client.head_bucket(Bucket=self._bucket)
+
     # --- multipart upload ---------------------------------------------------
 
     def create_multipart_upload(self, key: str, content_type: str) -> str:
