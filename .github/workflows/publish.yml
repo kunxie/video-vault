@@ -1,0 +1,295 @@
+name: Publish image
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/kunxie/video-vault
+  COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+  UV_VERSION: 0.11.28
+
+jobs:
+  publish:
+    name: publish, record, and verify ARM64 image
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out the accepted commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+          persist-credentials: false
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Resolve version and immutable build identities
+        id: version
+        run: |
+          version="$(uv version --short --locked)"
+          if [[ "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.dev0$ ]]; then
+            release_kind=development
+          elif [[ "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            release_kind=stable
+          else
+            echo "project version must be MAJOR.MINOR.PATCH.dev0 or stable MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          short_sha="${COMMIT_SHA:0:12}"
+          timestamp="$(git show -s --format=%ct "${COMMIT_SHA}")"
+          created="$(date --utc --date="@${timestamp}" +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "version=${version}"
+            echo "release_kind=${release_kind}"
+            echo "created=${created}"
+            echo "build_tag=${IMAGE_NAME}:${version}-g${short_sha}"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Install ARM64 emulation
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+      - name: Configure Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Authenticate to GHCR with the ephemeral repository token
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Detect existing image identities
+        id: existing
+        env:
+          BUILD_TAG: ${{ steps.version.outputs.build_tag }}
+        run: |
+          inspect_digest() {
+            local reference="$1"
+            local inspect_output
+            local inspect_status
+            set +e
+            inspect_output="$(docker buildx imagetools inspect "${reference}" 2>&1)"
+            inspect_status=$?
+            set -e
+            if test "${inspect_status}" -eq 0; then
+              awk '$1 == "Digest:" {print $2; exit}' <<< "${inspect_output}"
+            elif [[ "${inspect_output}" == *"not found"* || "${inspect_output}" == *"manifest unknown"* ]]; then
+              return 0
+            else
+              echo "${inspect_output}" >&2
+              return "${inspect_status}"
+            fi
+          }
+
+          commit_digest="$(inspect_digest "${IMAGE_NAME}:${COMMIT_SHA}")"
+          build_tag_digest="$(inspect_digest "${BUILD_TAG}")"
+          for digest in "${commit_digest}" "${build_tag_digest}"; do
+            if test -n "${digest}" && [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "registry returned an invalid image digest" >&2
+              exit 1
+            fi
+          done
+          if test -z "${commit_digest}" && test -n "${build_tag_digest}"; then
+            echo "versioned build tag already belongs to another commit" >&2
+            exit 1
+          fi
+          {
+            echo "found=$([[ -n "${commit_digest}" ]] && echo true || echo false)"
+            echo "commit_digest=${commit_digest}"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Build and publish the commit image once
+        id: build
+        if: steps.existing.outputs.found != 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.COMMIT_SHA }}
+            ${{ steps.version.outputs.build_tag }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=${{ steps.version.outputs.created }}
+            SOURCE_URL=https://github.com/${{ github.repository }}
+            VCS_REF=${{ env.COMMIT_SHA }}
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Capture the immutable registry digest
+        id: identity
+        env:
+          BUILD_TAG: ${{ steps.version.outputs.build_tag }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if test "${{ steps.existing.outputs.found }}" = true; then
+            digest="${{ steps.existing.outputs.commit_digest }}"
+          else
+            digest="${BUILD_DIGEST}"
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "registry did not return a valid sha256 digest" >&2
+            exit 1
+          fi
+          build_tag_digest="$(docker buildx imagetools inspect "${BUILD_TAG}" | awk '$1 == "Digest:" {print $2; exit}')"
+          if test "${build_tag_digest}" != "${digest}"; then
+            echo "versioned build tag does not match the commit digest" >&2
+            exit 1
+          fi
+          {
+            echo "digest=${digest}"
+            echo "tag=${IMAGE_NAME}:${COMMIT_SHA}"
+            echo "build_tag=${BUILD_TAG}"
+            echo "image=${IMAGE_NAME}@${digest}"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Verify the authenticated image identity
+        id: image_contract
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+          IMAGE: ${{ steps.identity.outputs.image }}
+        run: |
+          docker pull --platform linux/arm64 "${IMAGE}"
+          test "$(docker image inspect --format '{{.Architecture}}' "${IMAGE}")" = arm64
+          test "$(docker image inspect --format '{{.Config.User}}' "${IMAGE}")" = 10001:10001
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}")" = "${APP_VERSION}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE}")" = "${COMMIT_SHA}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.created"}}' "${IMAGE}")" = "${{ steps.version.outputs.created }}"
+          test "$(docker run --rm --platform linux/arm64 --network none --read-only "${IMAGE}" --version)" = "video-vault ${APP_VERSION} (revision ${COMMIT_SHA})"
+          alembic_head="$(docker run --rm --platform linux/arm64 --network none --read-only "${IMAGE}" schema-head)"
+          if [[ ! "${alembic_head}" =~ ^[0-9A-Za-z][0-9A-Za-z_.-]{0,31}$ ]]; then
+            echo "image did not report one valid packaged Alembic head" >&2
+            exit 1
+          fi
+          docker run --rm --platform linux/arm64 --network none --read-only \
+            "${IMAGE}" schema-descends-from "${alembic_head}"
+          echo "alembic_head=${alembic_head}" >> "${GITHUB_OUTPUT}"
+      - name: Generate the published-image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.identity.outputs.image }}
+          scanners: vuln
+          format: cyclonedx
+          output: video-vault.cdx.json
+      - name: Generate the published-image vulnerability report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.identity.outputs.image }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+          format: json
+          output: trivy-published-image.json
+      - name: Evaluate the required vulnerability policy
+        id: vulnerability_policy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.identity.outputs.image }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+      - name: Verify an anonymous ARM64 pull by digest
+        id: anonymous_pull
+        continue-on-error: true
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+          ALEMBIC_HEAD: ${{ steps.image_contract.outputs.alembic_head }}
+          IMAGE: ${{ steps.identity.outputs.image }}
+        run: |
+          docker image rm "${IMAGE}"
+          docker logout ghcr.io
+          docker pull --platform linux/arm64 "${IMAGE}"
+          test "$(docker image inspect --format '{{.Architecture}}' "${IMAGE}")" = arm64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}")" = "${APP_VERSION}"
+          test "$(docker run --rm --platform linux/arm64 --network none --read-only "${IMAGE}" schema-head)" = "${ALEMBIC_HEAD}"
+          docker run --rm --platform linux/arm64 --network none --read-only \
+            "${IMAGE}" schema-descends-from "${ALEMBIC_HEAD}"
+      - name: Write the publication record
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+          ALEMBIC_HEAD: ${{ steps.image_contract.outputs.alembic_head }}
+          BUILD_TAG: ${{ steps.identity.outputs.build_tag }}
+          CREATED: ${{ steps.version.outputs.created }}
+          DIGEST: ${{ steps.identity.outputs.digest }}
+          RELEASE_KIND: ${{ steps.version.outputs.release_kind }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          VULNERABILITY_RESULT: ${{ steps.vulnerability_policy.outcome }}
+          ANONYMOUS_PULL_RESULT: ${{ steps.anonymous_pull.outcome }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          jq --null-input \
+            --arg application_version "${APP_VERSION}" \
+            --arg release_kind "${RELEASE_KIND}" \
+            --arg source_commit "${COMMIT_SHA}" \
+            --arg source_created_at "${CREATED}" \
+            --arg image_tag "${TAG}" \
+            --arg versioned_image_tag "${BUILD_TAG}" \
+            --arg image_digest "${DIGEST}" \
+            --arg alembic_head "${ALEMBIC_HEAD}" \
+            --arg vulnerability_result "${VULNERABILITY_RESULT}" \
+            --arg anonymous_pull_result "${ANONYMOUS_PULL_RESULT}" \
+            --arg ci_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${CI_RUN_ID}" \
+            --arg publication_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{
+              schema_version: 5,
+              application_version: $application_version,
+              release_kind: $release_kind,
+              source_commit: $source_commit,
+              source_created_at: $source_created_at,
+              image_tag: $image_tag,
+              versioned_image_tag: $versioned_image_tag,
+              image_digest: $image_digest,
+              alembic_head: $alembic_head,
+              platform: "linux/arm64",
+              vulnerability_policy: $vulnerability_result,
+              anonymous_pull: $anonymous_pull_result,
+              sbom: "video-vault.cdx.json",
+              vulnerability_report: "trivy-published-image.json",
+              ci_run: $ci_run,
+              publication_run: $publication_run
+            }' > publication-record.json
+      - name: Retain the publication evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: publication-${{ env.COMMIT_SHA }}
+          path: |
+            publication-record.json
+            video-vault.cdx.json
+            trivy-published-image.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+      - name: Enforce release acceptance
+        if: >-
+          steps.vulnerability_policy.outcome != 'success' ||
+          steps.anonymous_pull.outcome != 'success'
+        run: |
+          echo "publication requires a passing vulnerability scan and anonymous ARM64 pull" >&2
+          exit 1

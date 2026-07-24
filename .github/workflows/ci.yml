@@ -1,0 +1,246 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  KUBERNETES_SCHEMA_REVISION: 5a65d88146aaabf1648f5a21fca28b6abf196f83
+  KUBECTL_VERSION: v1.36.2
+  KUBECTL_SHA256: 1e9045ec32bea85da43de85f0065358529ea7c7a152eca78154fba5b58c27d82
+  PYTHON_VERSION: 3.12.13
+  UV_VERSION: 0.11.28
+
+jobs:
+  quality:
+    name: quality / ${{ matrix.check }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - format
+          - lint
+          - typecheck
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install pinned Python
+        run: uv python install "${PYTHON_VERSION}"
+      - name: Install the locked development environment
+        run: uv sync --locked --all-groups --no-build
+      - name: Run quality check
+        env:
+          CHECK: ${{ matrix.check }}
+        run: |
+          case "${CHECK}" in
+            format) uv run --locked --no-build --no-sync ruff format --check . ;;
+            lint) uv run --locked --no-build --no-sync ruff check . ;;
+            typecheck) uv run --locked --no-build --no-sync mypy app migrations ;;
+            *) echo "unsupported quality check: ${CHECK}" >&2; exit 2 ;;
+          esac
+
+  tests:
+    name: deterministic tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install pinned Python
+        run: uv python install "${PYTHON_VERSION}"
+      - name: Install the locked development environment
+        run: uv sync --locked --all-groups --no-build
+      - name: Run tests with branch coverage
+        run: >-
+          uv run --locked --no-build --no-sync pytest
+          --cov=app --cov-branch --cov-report=term-missing
+
+  dependencies:
+    name: dependency vulnerability scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Scan locked dependencies and repository configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+  deployment:
+    name: application-owned deployment package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install the pinned Kubernetes client
+        run: |
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --silent --show-error \
+            --output "${RUNNER_TEMP}/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  ${RUNNER_TEMP}/kubectl" | sha256sum --check
+          install -m 0755 "${RUNNER_TEMP}/kubectl" "${RUNNER_TEMP}/bin/kubectl"
+      - name: Install the pinned Kubernetes schema validator
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --silent --show-error \
+            --output "${RUNNER_TEMP}/kubeconform.tar.gz" \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  ${RUNNER_TEMP}/kubeconform.tar.gz" | sha256sum --check
+          tar --extract --gzip --file "${RUNNER_TEMP}/kubeconform.tar.gz" \
+            --directory "${RUNNER_TEMP}/bin" kubeconform
+      - name: Render and schema-check the managed package
+        run: |
+          "${RUNNER_TEMP}/bin/kubectl" kustomize \
+            deploy/overlays/macmini-lab | \
+            "${RUNNER_TEMP}/bin/kubeconform" \
+              -kubernetes-version 1.36.0 \
+              -schema-location "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/${KUBERNETES_SCHEMA_REVISION}/{{ .NormalizedKubernetesVersion }}-standalone-strict/{{ .ResourceKind }}{{ .KindSuffix }}.json" \
+              -strict -summary
+
+  container:
+    name: ARM64 container, smoke, scan, and SBOM
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Resolve immutable build metadata
+        id: metadata
+        run: |
+          timestamp="$(git show -s --format=%ct "${GITHUB_SHA}")"
+          {
+            echo "version=$(uv version --short --locked)"
+            echo "created=$(date --utc --date="@${timestamp}" +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Configure Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build and load the native ARM64 image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: video-vault:ci-${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ steps.metadata.outputs.version }}
+            BUILD_DATE=${{ steps.metadata.outputs.created }}
+            SOURCE_URL=https://github.com/${{ github.repository }}
+            VCS_REF=${{ github.sha }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify the image contract and health endpoint
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+          IMAGE: video-vault:ci-${{ github.sha }}
+        run: |
+          test "$(docker image inspect --format '{{.Architecture}}' "${IMAGE}")" = arm64
+          test "$(docker image inspect --format '{{.Config.User}}' "${IMAGE}")" = 10001:10001
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}")" = "${APP_VERSION}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE}")" = "${GITHUB_SHA}"
+          test "$(docker run --rm --network none --read-only "${IMAGE}" --version)" = "video-vault ${APP_VERSION} (revision ${GITHUB_SHA})"
+          head="$(docker run --rm --network none --read-only "${IMAGE}" schema-head)"
+          test "${head}" = 0001_initial
+          docker run --rm --network none --read-only \
+            "${IMAGE}" schema-descends-from "${head}"
+
+          container_id="$(docker run --detach --rm --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --publish 127.0.0.1::8000 \
+            --env DATABASE_URL=sqlite:////tmp/video-vault.db \
+            --env MINIO_ENDPOINT=http://127.0.0.1:9000 \
+            --env MINIO_ACCESS_KEY=ci \
+            --env MINIO_SECRET_KEY=ci \
+            "${IMAGE}")"
+          cleanup() { docker rm --force "${container_id}" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          port="$(docker port "${container_id}" 8000/tcp | awk -F: '{print $NF}')"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent "http://127.0.0.1:${port}/healthz" | grep -q '"status":"ok"'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "${container_id}"
+          exit 1
+      - name: Generate the image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: video-vault:ci-${{ github.sha }}
+          scanners: vuln
+          format: cyclonedx
+          output: video-vault.cdx.json
+      - name: Enforce the image vulnerability policy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: video-vault:ci-${{ github.sha }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+      - name: Retain the image SBOM
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: video-vault-sbom-${{ github.sha }}
+          path: video-vault.cdx.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14

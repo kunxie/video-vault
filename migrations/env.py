@@ -5,15 +5,19 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.config import get_settings
+from app.config import get_database_settings
 from app.models import Base
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Feed the app's configured database URL to Alembic.
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Feed the app's configured database URL to Alembic. ConfigParser treats `%`
+# as interpolation syntax, so escape it after rendering any encoded password.
+database_url = (
+    get_database_settings().sqlalchemy_database_url().render_as_string(hide_password=False)
+)
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
